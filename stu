@@ -1,0 +1,71 @@
+use std::collections::{BTreeMap, VecDeque};
+use std::cmp::Reverse;
+
+// [x] Order 구조체 정의 (id, 매수/매도, 가격, 수량, 시간)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side { Buy, Sell }
+
+#[derive(Debug, Clone)]
+pub struct Order {
+    pub id: u64,
+    pub side: Side,
+    pub price: u64,
+    pub qty: u64,
+    pub ts_ms: u64,
+}
+
+// [x] 오더북 뼈대: BTreeMap<가격, VecDeque<Order>>
+#[derive(Debug)]
+pub struct Orderbook {
+    pub bids: BTreeMap<Reverse<u64>, VecDeque<Order>>, // 매수는 비싼 가격이 우선 (Reverse)
+    pub asks: BTreeMap<u64, VecDeque<Order>>,          // 매도는 싼 가격이 우선
+}
+
+impl Orderbook {
+    pub fn new() -> Self {
+        Self { bids: BTreeMap::new(), asks: BTreeMap::new() }
+    }
+
+    // [x] add_order() 만들어서 주문 넣기
+    pub fn add_order(&mut self, order: Order) {
+        match order.side {
+            Side::Buy => {
+                self.bids.entry(Reverse(order.price)).or_insert_with(VecDeque::new).push_back(order);
+            }
+            Side::Sell => {
+                self.asks.entry(order.price).or_insert_with(VecDeque::new).push_back(order);
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut ob = Orderbook::new();
+
+    // 주문 3개 넣기 (가격/시간순 정렬 확인용)
+    ob.add_order(Order { id: 1, side: Side::Sell, price: 1010, qty: 5, ts_ms: 100 });
+    ob.add_order(Order { id: 2, side: Side::Sell, price: 1000, qty: 2, ts_ms: 101 }); // 가격이 더 쌈
+    ob.add_order(Order { id: 3, side: Side::Sell, price: 1000, qty: 3, ts_ms: 102 }); // 가격 같고 나중에 옴
+
+    // [x] 터미널에 오더북 출력까지
+    println!("=== 현재 오더북 상태 ===");
+    println!("{:#?}", ob);
+}
+
+// [x] 테스트 1개 (주문 3개 넣으면 가격순 정렬되는지)
+// 터미널에서 `cargo test`를 치면 실행됩니다.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_order_sort() {
+        let mut ob = Orderbook::new();
+        ob.add_order(Order { id: 1, side: Side::Sell, price: 1010, qty: 5, ts_ms: 100 });
+        ob.add_order(Order { id: 2, side: Side::Sell, price: 1000, qty: 2, ts_ms: 101 });
+
+        // 매도(asks)는 가격이 가장 낮은 1000원이 첫 번째 요소로 정렬되어 있어야 함
+        let first_ask_price = *ob.asks.keys().next().unwrap();
+        assert_eq!(first_ask_price, 1000);
+    }
+}
