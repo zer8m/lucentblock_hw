@@ -1,21 +1,17 @@
-# React + TypeScript + Vite
+React + TypeScript + Vite
+이 템플릿은 Vite 환경에서 HMR(모듈 모듈 교체) 및 일부 Oxlint 규칙을 적용하여 React를 실행할 수 있는 최소한의 환경을 제공합니다.
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+현재 두 가지 공식 플러그인을 사용할 수 있습니다:
 
-Currently, two official plugins are available:
+@vitejs/plugin-react: Oxc를 사용
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+@vitejs/plugin-react-swc: SWC를 사용
 
-## React Compiler
+React Compiler
+React Compiler는 개발 및 빌드 성능에 영향을 줄 수 있어 이 템플릿에서는 기본적으로 활성화되어 있지 않습니다. 이를 추가하려면 관련 공식 문서를 참고하세요.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
+Oxlint 설정 확장하기
+프로덕션용 애플리케이션을 개발하는 경우, oxlint-tsgolint를 설치하고 .oxlintrc.json 파일에 아래와 같이 typeAware 규칙을 설정하는 것을 권장합니다:
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["react", "typescript", "oxc"],
@@ -29,4 +25,4 @@ If you are developing a production application, we recommend enabling type-aware
 }
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+전체 규칙 및 카테고리 목록은 Oxlint 규칙 문서를 확인하세요.(https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
