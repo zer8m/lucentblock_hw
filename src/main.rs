@@ -112,6 +112,10 @@ fn handle_conn(stream: TcpStream, engine: &Sender<EngineCommand>) -> std::io::Re
             let accepted = accept_order(&body, engine);
             (200, json!({ "accepted": accepted }).to_string())
         }
+        ("POST", "/engine/orders/cancel") => {
+            let canceled = accept_cancel(&body, engine);
+            (200, json!({ "canceled": canceled }).to_string())
+        }
         _ => (404, json!({ "error": "not found" }).to_string()),
     };
 
@@ -155,6 +159,18 @@ fn accept_order(body: &[u8], engine: &Sender<EngineCommand>) -> bool {
     });
     // 매칭까지 끝난 뒤 accepted를 돌려준다. 서버 read timeout이 1초지만 매칭은 마이크로초 단위라 여유.
     sent.is_ok() && reply_rx.recv().is_ok()
+}
+
+/// 취소 요청: {"order_id": N}. 오더북에 대기 중이던 주문을 뺐으면 true,
+/// 없으면(이미 전량 체결됐거나 모르는 id) false. 서버 협의용으로 미리 열어둔 형식.
+fn accept_cancel(body: &[u8], engine: &Sender<EngineCommand>) -> bool {
+    let Ok(v) = serde_json::from_slice::<Value>(body) else { return false };
+    let Some(order_id) = v["order_id"].as_u64() else { return false };
+    let (reply_tx, reply_rx) = channel();
+    if engine.send(EngineCommand::Cancel { order_id, reply: reply_tx }).is_err() {
+        return false;
+    }
+    matches!(reply_rx.recv(), Ok(Some(_)))
 }
 
 // ---------- 체결 발행 (엔진 -> 서버) ----------
@@ -249,6 +265,20 @@ mod tests {
         assert!(!accept_order(b"not json", &engine));
         let (bids, _) = depth(&engine);
         assert_eq!(bids, vec![(50_000, 2)]); // 거절된 주문은 오더북에 흔적이 없다
+    }
+
+    #[test]
+    fn cancel_request_removes_order_from_book() {
+        let (engine, _events) = start_engine();
+        assert!(accept_order(br#"{"order_id":7,"symbol":"BTCKRW","side":"BUY","price":1000,"qty":5,"ts_ms":1}"#, &engine));
+
+        assert!(accept_cancel(br#"{"order_id":7}"#, &engine));
+        let (bids, _) = depth(&engine);
+        assert!(bids.is_empty()); // 오더북에서 실제로 빠졌다
+
+        assert!(!accept_cancel(br#"{"order_id":7}"#, &engine)); // 두 번 취소는 false
+        assert!(!accept_cancel(br#"{"order_id":999}"#, &engine)); // 모르는 id
+        assert!(!accept_cancel(b"not json", &engine));
     }
 
     #[test]
