@@ -1,0 +1,4 @@
+# 이 PC의 mingw ld가 한글 사용자 경로를 처리하지 못해 Rust에 번들된 rust-lld를 쓴다.
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes"]
