@@ -182,13 +182,19 @@ fn publish_trades(events: Receiver<Trade>) {
         trade_id += 1;
         let body = trade_event_body(trade_id, &t, now_ms());
         // 서버가 trade_id로 중복을 걸러주므로(received:true) 성공할 때까지 재전송해도 안전하다.
+        // 서버가 늦게 떠도 밀린 이벤트가 순서대로 전송된다.
         // ponytail: 메모리 큐 + 무한 재시도. 엔진 프로세스가 죽으면 미전송분 유실 — WAL 붙일 때 해결.
+        let mut attempt: u64 = 0;
         loop {
             match post_json(SERVER_ADDR, "/internal/trades", &body) {
                 Ok(()) => break,
                 Err(e) => {
-                    eprintln!("체결 이벤트 전송 실패({e}), 1초 후 재시도: {body}");
-                    thread::sleep(Duration::from_secs(1));
+                    attempt += 1;
+                    if attempt == 1 || attempt % 10 == 0 {
+                        eprintln!("체결 이벤트 전송 실패({e}) — 서버(http://{SERVER_ADDR})가 떠 있는지 확인하세요. 재시도 {attempt}회째: {body}");
+                    }
+                    // 1초에서 시작해 5초까지 늘어나는 백오프.
+                    thread::sleep(Duration::from_secs(attempt.min(5)));
                 }
             }
         }
