@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/cex?characterEncoding=UTF-8&serverTimezone=Asia/Seoul
     username: root
-    password: "여기에 님 비번"
+    password: "..."
     driver-class-name: com.mysql.cj.jdbc.Driver
   jackson:
     property-naming-strategy: SNAKE_CASE
@@ -16,8 +16,8 @@ exchange:
   symbol: "BTCKRW"
 
 engine:
-  base-url: "http://localhost:9000"
-  enabled: false
+  base-url: "http://127.0.0.1:9000"
+  enabled: true
 
 logging:
   level:
