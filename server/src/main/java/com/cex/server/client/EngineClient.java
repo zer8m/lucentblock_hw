@@ -22,16 +22,13 @@ public class EngineClient {
 
     public EngineClient(@Value("${engine.base-url:http://localhost:9000}") String baseUrl,
                         @Value("${engine.enabled:false}") boolean enabled) {
-        // 트랜잭션 안에서 호출되므로(그동안 DB 행 잠금을 쥐고 있다) 타임아웃을 짧게 잡는다.
-        var factory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout((int) Duration.ofMillis(500).toMillis());
-        factory.setReadTimeout((int) Duration.ofMillis(1000).toMillis());
+        var factory = new org.springframework.http.client.JdkClientHttpRequestFactory();
+        factory.setReadTimeout(Duration.ofMillis(1000));
 
         this.restTemplate = new RestTemplate(factory);
         this.baseUrl = baseUrl;
         this.enabled = enabled;
     }
-
     /**
      * @return 엔진이 accepted:true를 돌려줬으면 true. 통신 실패/거절이면 false.
      *
@@ -44,8 +41,16 @@ public class EngineClient {
             return true;
         }
         try {
+            String body = String.format(
+                    "{\"order_id\":%d,\"symbol\":\"%s\",\"side\":\"%s\",\"price\":%d,\"qty\":%d,\"ts_ms\":%d}",
+                    req.orderId(), req.symbol(), req.side(), req.price(), req.qty(), req.tsMs());
+
+            var headers = new org.springframework.http.HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            var entity = new org.springframework.http.HttpEntity<>(body, headers);
+
             EngineOrderResponse res = restTemplate.postForObject(
-                    baseUrl + "/engine/orders", req, EngineOrderResponse.class);
+                    baseUrl + "/engine/orders", entity, EngineOrderResponse.class);
             if (res == null || !res.accepted()) {
                 log.warn("엔진이 주문을 거절했습니다. order_id={}", req.orderId());
                 return false;
