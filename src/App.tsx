@@ -16,6 +16,7 @@ export default function App() {
   const [qty, setQty] = useState<string>('1');
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [lastTakerSide, setLastTakerSide] = useState<'BUY' | 'SELL'>('BUY');
+  const [currentPrice, setCurrentPrice] = useState<number>(1000);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -30,12 +31,16 @@ export default function App() {
       setBalances(balData);
       setOrders(ordData);
       setTrades(trdData);
+      if (trdData.length > 0) {
+        setCurrentPrice(trdData[0].price);
+        setLastTakerSide(trdData[0].taker_side);
+      }
     } catch (err) {
       console.warn('초기 API 데이터 로드 대기 중 (백엔드 서버 확인 필요):', err);
     }
   };
 
-  // 2. 컴포넌트 마운트 시 초기 조회 & 웹소켓 연결
+  // 2. 컴포넌트 마운트 시 초기 조회 & 웹소켓 연결 (실시간 체결 이벤트 처리)
   useEffect(() => {
     loadInitialData();
 
@@ -50,14 +55,18 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        // 서버에서 브로드캐스트되는 체결 이벤트 수신
         const tradeData: TradeItem = msg.data || msg;
+
+        // 진짜 체결 이벤트 수신 시 화면 실시간 갱신
         if (tradeData.price && tradeData.qty) {
           setTrades((prev) => [tradeData, ...prev.slice(0, 49)]);
+          setCurrentPrice(tradeData.price);
+          
           if (tradeData.taker_side) {
             setLastTakerSide(tradeData.taker_side);
           }
-          // 체결 시 잔고/주문목록 최신화
+          
+          // 체결 시 내 잔고/미체결 주문목록 동기화
           loadInitialData();
         }
       } catch (e) {
@@ -75,7 +84,7 @@ export default function App() {
     };
   }, []);
 
-  // 3. 에러 코드별 알림 처리 핸들러
+  // 3. 주문 제출 핸들러
   const handleOrderSubmit = async (side: 'BUY' | 'SELL') => {
     if (!price || Number(price) <= 0 || !qty || Number(qty) <= 0) {
       alert('⚠️ 가격과 수량을 올바르게 입력해주세요.');
@@ -91,32 +100,32 @@ export default function App() {
         qty: Number(qty),
       });
       alert(`✅ ${side === 'BUY' ? '매수' : '매도'} 주문이 접수되었습니다.`);
-      loadInitialData(); // 접수 후 목록 갱신
+      loadInitialData();
     } catch (error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  switch (message) {
-    case 'INSUFFICIENT_BALANCE':
-      alert('❌ [잔고 부족] 잔여 잔고가 부족하여 주문할 수 없습니다.');
-      break;
-    case 'INVALID_PARAM':
-      alert('❌ [입력 오류] 가격 또는 수량이 올바르지 않습니다.');
-      break;
-    case 'ENGINE_UNAVAILABLE':
-      alert('⚠️ [엔진 점검] 매칭 엔진 서버가 동작하지 않습니다. 백엔드 상태를 확인해주세요.');
-      break;
-    case 'ORDER_NOT_FOUND':
-      alert('❌ 주문을 찾을 수 없습니다.');
-      break;
-    case 'ORDER_NOT_CANCELABLE':
-      alert('❌ 이미 체결되었거나 취소할 수 없는 주문입니다.');
-      break;
-    default:
-      alert(`⚠️ 주문 요청 실패 (오류: ${message})`);
-  }
-}
+      const message = error instanceof Error ? error.message : String(error);
+      switch (message) {
+        case 'INSUFFICIENT_BALANCE':
+          alert('❌ [잔고 부족] 잔여 잔고가 부족하여 주문할 수 없습니다.');
+          break;
+        case 'INVALID_PARAM':
+          alert('❌ [입력 오류] 가격 또는 수량이 올바르지 않습니다.');
+          break;
+        case 'ENGINE_UNAVAILABLE':
+          alert('⚠️ [엔진 점검] 매칭 엔진 서버가 동작하지 않습니다. 백엔드 상태를 확인해주세요.');
+          break;
+        case 'ORDER_NOT_FOUND':
+          alert('❌ 주문을 찾을 수 없습니다.');
+          break;
+        case 'ORDER_NOT_CANCELABLE':
+          alert('❌ 이미 체결되었거나 취소할 수 없는 주문입니다.');
+          break;
+        default:
+          alert(`⚠️ 주문 요청 실패 (오류: ${message})`);
+      }
+    }
   };
 
-  // 색상 테마 (BUY: 빨강, SELL: 파랑)
+  // 색상 테마: BUY(매수) 빨강, SELL(매도) 파랑
   const buyColor = '#ef4444';
   const sellColor = '#3b82f6';
 
@@ -149,12 +158,25 @@ export default function App() {
       {/* 3분할 메인 레이아웃 */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '20px' }}>
         
-        {/* 1. 호가창 (오더북 & taker_side 색칠) */}
+        {/* 1. 호가창 (현재가 및 taker_side 색칠 반영) */}
         <div style={{ backgroundColor: '#1e293b', padding: '16px', borderRadius: '8px' }}>
           <h3 style={{ marginTop: 0, borderBottom: '1px solid #334155', paddingBottom: '8px' }}>호가창</h3>
-          <div style={{ padding: '8px 0', textAlign: 'center', backgroundColor: '#0f172a', borderRadius: '4px', marginBottom: '10px' }}>
-            최근 체결 방향: <strong style={{ color: lastTakerSide === 'BUY' ? buyColor : sellColor }}>{lastTakerSide}</strong>
+          
+          {/* 최근 체결 방향 및 현재 체결가 강조 */}
+          <div style={{
+            padding: '10px',
+            textAlign: 'center',
+            backgroundColor: '#0f172a',
+            borderRadius: '6px',
+            marginBottom: '12px',
+            border: `1px solid ${lastTakerSide === 'BUY' ? buyColor : sellColor}`
+          }}>
+            <div style={{ fontSize: '12px', color: '#94a3b8' }}>최근 체결 방향</div>
+            <div style={{ fontSize: '18px', fontWeight: 'bold', color: lastTakerSide === 'BUY' ? buyColor : sellColor, marginTop: '2px' }}>
+              {formatNumber(currentPrice)} KRW ({lastTakerSide === 'BUY' ? '매수 체결' : '매도 체결'})
+            </div>
           </div>
+
           <table style={{ width: '100%', textAlign: 'right', fontSize: '14px' }}>
             <thead>
               <tr style={{ color: '#94a3b8' }}>
@@ -164,6 +186,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
+              {/* 매도 호가 (파란색 계열) */}
               <tr style={{ color: sellColor }}>
                 <td style={{ textAlign: 'left' }}>매도호가</td>
                 <td>1,050</td>
@@ -174,7 +197,16 @@ export default function App() {
                 <td>1,000</td>
                 <td>5.00</td>
               </tr>
-              <tr style={{ borderTop: '1px dashed #475569', color: buyColor }}>
+              
+              {/* 중앙 현재가 구분선 */}
+              <tr style={{ backgroundColor: '#0f172a' }}>
+                <td colSpan={3} style={{ textAlign: 'center', padding: '6px 0', fontSize: '12px', color: lastTakerSide === 'BUY' ? buyColor : sellColor, fontWeight: 'bold' }}>
+                  ─── 현재가 {formatNumber(currentPrice)} ───
+                </td>
+              </tr>
+
+              {/* 매수 호가 (빨간색 계열) */}
+              <tr style={{ color: buyColor }}>
                 <td style={{ textAlign: 'left' }}>매수호가</td>
                 <td>950</td>
                 <td>3.20</td>
@@ -237,7 +269,7 @@ export default function App() {
                   <th style={{ textAlign: 'left' }}>시간</th>
                   <th>가격</th>
                   <th>수량</th>
-                  <th>방향</th>
+                  <th>체결구분</th>
                 </tr>
               </thead>
               <tbody>
@@ -249,7 +281,17 @@ export default function App() {
                       <td style={{ textAlign: 'left', color: '#94a3b8' }}>{formatTime(t.ts_ms)}</td>
                       <td>{formatNumber(t.price)}</td>
                       <td>{t.qty}</td>
-                      <td><strong>{t.taker_side}</strong></td>
+                      <td>
+                        <span style={{
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          backgroundColor: t.taker_side === 'BUY' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+                          color: t.taker_side === 'BUY' ? buyColor : sellColor
+                        }}>
+                          {t.taker_side === 'BUY' ? '매수' : '매도'}
+                        </span>
+                      </td>
                     </tr>
                   ))
                 )}
