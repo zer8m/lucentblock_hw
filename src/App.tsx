@@ -40,10 +40,13 @@ export default function App() {
     }
   };
 
-  // 2. 컴포넌트 마운트 시 초기 조회 & 웹소켓 연결 (실시간 체결 이벤트 처리)
-  useEffect(() => {
-    loadInitialData();
+  // 2. 컴포넌트 마운트 시 초기 조회 & 웹소켓 연결 (자동 재연결 포함)
+useEffect(() => {
+  loadInitialData();
 
+  let reconnectTimer: NodeJS.Timeout;
+
+  const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8080/ws');
     wsRef.current = ws;
 
@@ -57,16 +60,14 @@ export default function App() {
         const msg = JSON.parse(event.data);
         const tradeData: TradeItem = msg.data || msg;
 
-        // 진짜 체결 이벤트 수신 시 화면 실시간 갱신
         if (tradeData.price && tradeData.qty) {
           setTrades((prev) => [tradeData, ...prev.slice(0, 49)]);
           setCurrentPrice(tradeData.price);
-          
+
           if (tradeData.taker_side) {
             setLastTakerSide(tradeData.taker_side);
           }
-          
-          // 체결 시 내 잔고/미체결 주문목록 동기화
+
           loadInitialData();
         }
       } catch (e) {
@@ -75,14 +76,30 @@ export default function App() {
     };
 
     ws.onclose = () => {
-      console.log('❌ WebSocket 연결 종료');
+      console.log('❌ WebSocket 연결 종료. 3초 후 재연결 시도...');
       setWsConnected(false);
+
+      // 연결이 끊기면 3초 뒤에 재연결 함수 실행
+      reconnectTimer = setTimeout(() => {
+        connectWebSocket();
+      }, 3000);
     };
 
-    return () => {
-      ws.close();
+    ws.onerror = (error) => {
+      console.error('WebSocket 에러 발생:', error);
+      ws.close(); // 에러 발생 시 close를 유도하여 onclose에서 재연결 처리
     };
-  }, []);
+  };
+
+  connectWebSocket();
+
+  return () => {
+    clearTimeout(reconnectTimer);
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+  };
+}, []);
 
   // 3. 주문 제출 핸들러
   const handleOrderSubmit = async (side: 'BUY' | 'SELL') => {
@@ -301,30 +318,63 @@ export default function App() {
 
           <h3 style={{ borderBottom: '1px solid #334155', paddingBottom: '8px' }}>내 미체결 주문</h3>
           <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
-            <table style={{ width: '100%', textAlign: 'right', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ color: '#94a3b8' }}>
-                  <th style={{ textAlign: 'left' }}>시간</th>
-                  <th>구분</th>
-                  <th>가격</th>
-                  <th>수량</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.length === 0 ? (
-                  <tr><td colSpan={4} style={{ textAlign: 'center', color: '#64748b', padding: '10px 0' }}>미체결 주문 없음</td></tr>
-                ) : (
-                  orders.map((o) => (
-                    <tr key={o.order_id}>
-                      <td style={{ textAlign: 'left', color: '#94a3b8' }}>{formatTime(o.created_at)}</td>
-                      <td style={{ color: o.side === 'BUY' ? buyColor : sellColor }}>{o.side}</td>
-                      <td>{formatNumber(o.price)}</td>
-                      <td>{o.qty}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <table style={{ width: '100%', textAlign: 'right', fontSize: '14px' }}>
+            <thead>
+              <tr style={{ color: '#94a3b8' }}>
+                <th style={{ textAlign: 'left' }}>구분</th>
+                <th>가격(KRW)</th>
+                <th>수량</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* 매도 호가 (기본 파란색 계열, 최근 체결 방향이 SELL이면 강조) */}
+              <tr style={{ 
+                color: sellColor, 
+                backgroundColor: lastTakerSide === 'SELL' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                transition: 'background-color 0.2s'
+              }}>
+                <td style={{ textAlign: 'left' }}>매도호가</td>
+                <td>1,050</td>
+                <td>2.50</td>
+              </tr>
+              <tr style={{ 
+                color: sellColor, 
+                backgroundColor: lastTakerSide === 'SELL' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                transition: 'background-color 0.2s'
+              }}>
+                <td style={{ textAlign: 'left' }}>매도호가</td>
+                <td>1,000</td>
+                <td>5.00</td>
+              </tr>
+              
+              {/* 중앙 현재가 구분선 */}
+              <tr style={{ backgroundColor: '#0f172a' }}>
+                <td colSpan={3} style={{ textAlign: 'center', padding: '6px 0', fontSize: '12px', color: lastTakerSide === 'BUY' ? buyColor : sellColor, fontWeight: 'bold' }}>
+                  ─── 현재가 {formatNumber(currentPrice)} ───
+                </td>
+              </tr>
+
+              {/* 매수 호가 (기본 빨간색 계열, 최근 체결 방향이 BUY이면 강조) */}
+              <tr style={{ 
+                color: buyColor, 
+                backgroundColor: lastTakerSide === 'BUY' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                transition: 'background-color 0.2s'
+              }}>
+                <td style={{ textAlign: 'left' }}>매수호가</td>
+                <td>950</td>
+                <td>3.20</td>
+              </tr>
+              <tr style={{ 
+                color: buyColor, 
+                backgroundColor: lastTakerSide === 'BUY' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                transition: 'background-color 0.2s'
+              }}>
+                <td style={{ textAlign: 'left' }}>매수호가</td>
+                <td>900</td>
+                <td>1.80</td>
+              </tr>
+            </tbody>
+          </table>
           </div>
         </div>
 
