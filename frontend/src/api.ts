@@ -37,6 +37,17 @@ export interface TradeItem {
   ts_ms: number;
 }
 
+export interface BookLevel {
+  price: number;
+  qty: number;
+}
+
+export interface BookSnapshot {
+  symbol: string;
+  bids: BookLevel[]; // 비싼 순
+  asks: BookLevel[]; // 싼 순
+}
+
 // 1. 주문 접수
 export async function placeOrder(order: OrderRequest) {
   const payload = {
@@ -89,4 +100,13 @@ export async function fetchTrades(symbol: string = 'BTCKRW'): Promise<TradeItem[
   if (!res.ok) throw new Error('체결 내역 조회 실패');
   const data = await res.json();
   return data.trades || [];
+}
+
+// 5. 호가창 조회 (매칭 엔진 직접 호출)
+const ENGINE_URL = 'http://localhost:9000';
+
+export async function fetchBook(): Promise<BookSnapshot> {
+  const res = await fetch(`${ENGINE_URL}/engine/book`);
+  if (!res.ok) throw new Error('호가창 조회 실패');
+  return res.json();
 }

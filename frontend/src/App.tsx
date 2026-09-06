@@ -4,13 +4,15 @@ import {
   fetchBalances,
   fetchOrders,
   fetchTrades,
+  fetchBook,
 } from './api';
-import type { BalanceItem, OrderItem, TradeItem } from './api';
+import type { BalanceItem, OrderItem, TradeItem, BookSnapshot } from './api';
 import { formatTime, formatNumber } from './utils';
 
 export default function App() {
   const [balances, setBalances] = useState<BalanceItem[]>([]);
-  const [, setOrders] = useState<OrderItem[]>([]);
+  const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [book, setBook] = useState<BookSnapshot>({ symbol: 'BTCKRW', bids: [], asks: [] });
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [price, setPrice] = useState<string>('1000');
   const [qty, setQty] = useState<string>('1');
@@ -20,8 +22,18 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  // 0. 호가창 조회 (엔진 직접). 엔진이 꺼져 있으면 이전 값 유지.
+  const loadBook = async () => {
+    try {
+      setBook(await fetchBook());
+    } catch {
+      /* 엔진 미기동 시 무시 */
+    }
+  };
+
   // 1. 초기 데이터 조회 함수
   const loadInitialData = async () => {
+    loadBook();
     try {
       const [balData, ordData, trdData] = await Promise.all([
         fetchBalances(1),
@@ -93,8 +105,12 @@ useEffect(() => {
 
   connectWebSocket();
 
+  // 웹소켓이 아직 호가를 안 주므로 호가창은 2초 폴링으로 갱신.
+  const bookTimer = setInterval(loadBook, 2000);
+
   return () => {
     clearTimeout(reconnectTimer);
+    clearInterval(bookTimer);
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -203,18 +219,19 @@ useEffect(() => {
               </tr>
             </thead>
             <tbody>
-              {/* 매도 호가 (파란색 계열) */}
-              <tr style={{ color: sellColor }}>
-                <td style={{ textAlign: 'left' }}>매도호가</td>
-                <td>1,050</td>
-                <td>2.50</td>
-              </tr>
-              <tr style={{ color: sellColor }}>
-                <td style={{ textAlign: 'left' }}>매도호가</td>
-                <td>1,000</td>
-                <td>5.00</td>
-              </tr>
-              
+              {/* 매도 호가: 엔진 응답은 싼 순이므로 뒤집어서 비싼 가격이 위로 */}
+              {book.asks.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: 'center', color: '#64748b', padding: '6px 0' }}>매도 호가 없음</td></tr>
+              ) : (
+                [...book.asks].reverse().map((l) => (
+                  <tr key={`ask-${l.price}`} style={{ color: sellColor }}>
+                    <td style={{ textAlign: 'left' }}>매도호가</td>
+                    <td>{formatNumber(l.price)}</td>
+                    <td>{formatNumber(l.qty)}</td>
+                  </tr>
+                ))
+              )}
+
               {/* 중앙 현재가 구분선 */}
               <tr style={{ backgroundColor: '#0f172a' }}>
                 <td colSpan={3} style={{ textAlign: 'center', padding: '6px 0', fontSize: '12px', color: lastTakerSide === 'BUY' ? buyColor : sellColor, fontWeight: 'bold' }}>
@@ -222,17 +239,18 @@ useEffect(() => {
                 </td>
               </tr>
 
-              {/* 매수 호가 (빨간색 계열) */}
-              <tr style={{ color: buyColor }}>
-                <td style={{ textAlign: 'left' }}>매수호가</td>
-                <td>950</td>
-                <td>3.20</td>
-              </tr>
-              <tr style={{ color: buyColor }}>
-                <td style={{ textAlign: 'left' }}>매수호가</td>
-                <td>900</td>
-                <td>1.80</td>
-              </tr>
+              {/* 매수 호가: 엔진 응답이 이미 비싼 순 */}
+              {book.bids.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: 'center', color: '#64748b', padding: '6px 0' }}>매수 호가 없음</td></tr>
+              ) : (
+                book.bids.map((l) => (
+                  <tr key={`bid-${l.price}`} style={{ color: buyColor }}>
+                    <td style={{ textAlign: 'left' }}>매수호가</td>
+                    <td>{formatNumber(l.price)}</td>
+                    <td>{formatNumber(l.qty)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -327,52 +345,17 @@ useEffect(() => {
               </tr>
             </thead>
             <tbody>
-              {/* 매도 호가 (기본 파란색 계열, 최근 체결 방향이 SELL이면 강조) */}
-              <tr style={{ 
-                color: sellColor, 
-                backgroundColor: lastTakerSide === 'SELL' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                transition: 'background-color 0.2s'
-              }}>
-                <td style={{ textAlign: 'left' }}>매도호가</td>
-                <td>1,050</td>
-                <td>2.50</td>
-              </tr>
-              <tr style={{ 
-                color: sellColor, 
-                backgroundColor: lastTakerSide === 'SELL' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                transition: 'background-color 0.2s'
-              }}>
-                <td style={{ textAlign: 'left' }}>매도호가</td>
-                <td>1,000</td>
-                <td>5.00</td>
-              </tr>
-              
-              {/* 중앙 현재가 구분선 */}
-              <tr style={{ backgroundColor: '#0f172a' }}>
-                <td colSpan={3} style={{ textAlign: 'center', padding: '6px 0', fontSize: '12px', color: lastTakerSide === 'BUY' ? buyColor : sellColor, fontWeight: 'bold' }}>
-                  ─── 현재가 {formatNumber(currentPrice)} ───
-                </td>
-              </tr>
-
-              {/* 매수 호가 (기본 빨간색 계열, 최근 체결 방향이 BUY이면 강조) */}
-              <tr style={{ 
-                color: buyColor, 
-                backgroundColor: lastTakerSide === 'BUY' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
-                transition: 'background-color 0.2s'
-              }}>
-                <td style={{ textAlign: 'left' }}>매수호가</td>
-                <td>950</td>
-                <td>3.20</td>
-              </tr>
-              <tr style={{ 
-                color: buyColor, 
-                backgroundColor: lastTakerSide === 'BUY' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
-                transition: 'background-color 0.2s'
-              }}>
-                <td style={{ textAlign: 'left' }}>매수호가</td>
-                <td>900</td>
-                <td>1.80</td>
-              </tr>
+              {orders.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: 'center', color: '#64748b', padding: '10px 0' }}>미체결 주문 없음</td></tr>
+              ) : (
+                orders.map((o) => (
+                  <tr key={o.order_id} style={{ color: o.side === 'BUY' ? buyColor : sellColor }}>
+                    <td style={{ textAlign: 'left' }}>{o.side === 'BUY' ? '매수' : '매도'} #{o.order_id}</td>
+                    <td>{formatNumber(o.price)}</td>
+                    <td>{formatNumber(o.qty - o.filled_qty)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
           </div>

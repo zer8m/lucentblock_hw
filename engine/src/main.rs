@@ -123,7 +123,7 @@ fn handle_conn(stream: TcpStream, engine: &Sender<EngineCommand>) -> std::io::Re
     let reason = if status == 200 { "OK" } else { "Not Found" };
     write!(
         &stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
         response.len()
     )
 }
