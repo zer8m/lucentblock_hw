@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: cex-server
+  datasource:
+    url: jdbc:mysql://localhost:3306/cex?characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    username: root
+    password: "..."
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+
+server:
+  port: 8080
+
+exchange:
+  symbol: "BTCKRW"
+
+engine:
+  base-url: "http://127.0.0.1:9000"
+  enabled: true
+
+logging:
+  level:
+    com.cex.server: DEBUG
+    org.springframework.jdbc.core: DEBUG
