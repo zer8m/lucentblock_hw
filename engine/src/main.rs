@@ -116,6 +116,7 @@ fn handle_conn(stream: TcpStream, engine: &Sender<EngineCommand>) -> std::io::Re
             let canceled = accept_cancel(&body, engine);
             (200, json!({ "canceled": canceled }).to_string())
         }
+        ("GET", "/engine/book") => (200, book_json(engine)),
         _ => (404, json!({ "error": "not found" }).to_string()),
     };
 
@@ -171,6 +172,16 @@ fn accept_cancel(body: &[u8], engine: &Sender<EngineCommand>) -> bool {
         return false;
     }
     matches!(reply_rx.recv(), Ok(Some(_)))
+}
+
+/// 호가창 스냅샷. 매수는 비싼 순, 매도는 싼 순.
+/// GET /engine/book -> {"symbol", "bids":[{"price","qty"}...], "asks":[...]}
+fn book_json(engine: &Sender<EngineCommand>) -> String {
+    let (bids, asks) = ask(engine, |r| EngineCommand::Book { reply: r });
+    let levels = |ls: &[(Price, Qty)]| -> Vec<Value> {
+        ls.iter().map(|&(price, qty)| json!({ "price": price, "qty": qty })).collect()
+    };
+    json!({ "symbol": SYMBOL, "bids": levels(&bids), "asks": levels(&asks) }).to_string()
 }
 
 // ---------- 체결 발행 (엔진 -> 서버) ----------
@@ -271,6 +282,21 @@ mod tests {
         assert!(!accept_order(b"not json", &engine));
         let (bids, _) = depth(&engine);
         assert_eq!(bids, vec![(50_000, 2)]); // 거절된 주문은 오더북에 흔적이 없다
+    }
+
+    #[test]
+    fn book_endpoint_returns_depth() {
+        let (engine, _events) = start_engine();
+        assert!(accept_order(br#"{"order_id":1,"symbol":"BTCKRW","side":"BUY","price":900,"qty":2,"ts_ms":1}"#, &engine));
+        assert!(accept_order(br#"{"order_id":2,"symbol":"BTCKRW","side":"BUY","price":950,"qty":1,"ts_ms":2}"#, &engine));
+        assert!(accept_order(br#"{"order_id":3,"symbol":"BTCKRW","side":"SELL","price":1000,"qty":5,"ts_ms":3}"#, &engine));
+
+        let v: Value = serde_json::from_str(&book_json(&engine)).unwrap();
+        assert_eq!(v["symbol"], "BTCKRW");
+        // 매수는 비싼 순
+        assert_eq!(v["bids"][0], json!({"price": 950, "qty": 1}));
+        assert_eq!(v["bids"][1], json!({"price": 900, "qty": 2}));
+        assert_eq!(v["asks"][0], json!({"price": 1000, "qty": 5}));
     }
 
     #[test]

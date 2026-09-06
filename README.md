@@ -20,4 +20,5 @@
 
 - 서버 → 엔진: `POST :9000/engine/orders` `{order_id, symbol, side("BUY"/"SELL"), price, qty, ts_ms}` → `{"accepted":bool}`
 - 서버 → 엔진: `POST :9000/engine/orders/cancel` `{order_id}` → `{"canceled":bool}`
+- 조회(누구나): `GET :9000/engine/book` → `{symbol, bids:[{price,qty}...](비싼 순), asks:[...](싼 순)}`
 - 엔진 → 서버: `POST :8080/internal/trades` `{trade_id, symbol, buy_order_id, sell_order_id, price, qty, taker_side, ts_ms}` — trade_id는 1부터 증가, 서버가 중복 제거
