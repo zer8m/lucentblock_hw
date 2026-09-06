@@ -10,7 +10,7 @@ import { formatTime, formatNumber } from './utils';
 
 export default function App() {
   const [balances, setBalances] = useState<BalanceItem[]>([]);
-  const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [, setOrders] = useState<OrderItem[]>([]);
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [price, setPrice] = useState<string>('1000');
   const [qty, setQty] = useState<string>('1');
@@ -44,7 +44,7 @@ export default function App() {
 useEffect(() => {
   loadInitialData();
 
-  let reconnectTimer: NodeJS.Timeout;
+  let reconnectTimer: ReturnType<typeof setTimeout>;
 
   const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8080/ws');
