@@ -105,8 +105,8 @@ useEffect(() => {
 
   connectWebSocket();
 
-  // 웹소켓이 아직 호가를 안 주므로 호가창은 2초 폴링으로 갱신.
-  const bookTimer = setInterval(loadBook, 2000);
+  // 웹소켓이 붙기 전까지는 2초 폴링으로 전체(호가창·잔고·주문·체결)를 갱신.
+  const bookTimer = setInterval(loadInitialData, 2000);
 
   return () => {
     clearTimeout(reconnectTimer);

@@ -187,8 +187,10 @@ fn book_json(engine: &Sender<EngineCommand>) -> String {
 // ---------- 체결 발행 (엔진 -> 서버) ----------
 
 fn publish_trades(events: Receiver<Trade>) {
-    // trade_id 발행 규칙: 1부터 중복 없이 증가. 발행 스레드가 하나뿐이라 카운터면 충분.
-    let mut trade_id: u64 = 0;
+    // trade_id 발행 규칙: 중복 없이 증가. 부팅 시각(ms)에서 시작해 1씩 올린다 —
+    // 엔진을 재시작해도 이전에 발행한 id와 겹치지 않아야 서버가 새 체결을 중복으로 버리지 않는다.
+    // (1부터 시작하는 카운터는 재시작하면 리셋돼 실제로 정산 누락이 발생했다.)
+    let mut trade_id: u64 = now_ms();
     for t in events {
         trade_id += 1;
         let body = trade_event_body(trade_id, &t, now_ms());
