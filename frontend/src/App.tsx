@@ -35,13 +35,15 @@ export default function App() {
   const loadInitialData = async () => {
     loadBook();
     try {
-      const [balData, ordData, trdData] = await Promise.all([
+      // 미체결 = OPEN + 부분 체결(PARTIALLY_FILLED). 서버 status 파라미터가 단일값이라 두 번 불러 합친다.
+      const [balData, openOrd, partialOrd, trdData] = await Promise.all([
         fetchBalances(1),
         fetchOrders(1, 'OPEN'),
+        fetchOrders(1, 'PARTIALLY_FILLED'),
         fetchTrades('BTCKRW'),
       ]);
       setBalances(balData);
-      setOrders(ordData);
+      setOrders([...openOrd, ...partialOrd].sort((a, b) => b.order_id - a.order_id));
       setTrades(trdData);
       if (trdData.length > 0) {
         setCurrentPrice(trdData[0].price);
