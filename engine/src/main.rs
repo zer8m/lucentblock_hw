@@ -4,7 +4,9 @@
 //! - 체결이 나면 `POST :8080/internal/trades` 로 체결 이벤트를 발행한다
 //! - 터미널에서 `book` / `trades` 를 치면 오더북·체결 내역을 눈으로 확인할 수 있다
 
-use lucent::{start_engine, EngineCommand, OrderType, Price, Qty, Side, Trade};
+use lucent::{start_engine_wal, EngineCommand, OrderType, Price, Qty, Side, Trade};
+#[cfg(test)]
+use lucent::start_engine;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -18,9 +20,12 @@ const SYMBOL: &str = "BTCKRW";
 const LISTEN_ADDR: &str = "127.0.0.1:9000";
 /// 체결 이벤트를 보낼 서버 주소.
 const SERVER_ADDR: &str = "127.0.0.1:8080";
+/// 오더북 복구용 WAL. 실행 폴더(engine/)에 쌓인다.
+const WAL_PATH: &str = "wal.log";
 
 fn main() {
-    let (engine, events) = start_engine();
+    // 재시작하면 이 WAL을 재생해 오더북을 복원한다(복구된 체결은 재발행하지 않음).
+    let (engine, events) = start_engine_wal(std::path::PathBuf::from(WAL_PATH));
     thread::spawn(move || publish_trades(events));
     {
         let engine = engine.clone();
@@ -30,6 +35,7 @@ fn main() {
     println!("매칭 엔진 가동");
     println!("  주문 수신: http://{LISTEN_ADDR}/engine/orders");
     println!("  체결 발행: http://{SERVER_ADDR}/internal/trades");
+    println!("  WAL: {WAL_PATH}");
     println!("  CLI: book | trades | quit");
 
     for line in std::io::stdin().lock().lines() {

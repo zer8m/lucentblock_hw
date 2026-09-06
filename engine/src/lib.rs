@@ -5,8 +5,13 @@
 //!   - VecDeque: 같은 가격 안에서는 먼저 들어온 주문이 앞(선착순)
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+
+use serde_json::{json, Value};
 
 pub type OrderId = u64;
 /// 가격. 부동소수점 오차를 피하려고 항상 정수(최소 호가 단위 기준)로 다룬다.
@@ -261,26 +266,46 @@ pub enum EngineCommand {
 ///
 /// 반환: (명령을 보낼 채널, 체결 이벤트가 나오는 채널 — WAL/브로드캐스트 소비자 자리)
 pub fn start_engine() -> (Sender<EngineCommand>, Receiver<Trade>) {
+    start_engine_wal(None)
+}
+
+/// WAL 파일을 붙여 재시작 복구를 켠다. 경로가 있으면 부팅 시 그 파일을 재생해 오더북을 복원하고,
+/// 이후 주문·취소를 처리 직전에 append 한다(write-ahead). None이면 WAL 없이 메모리로만 돈다.
+pub fn start_engine_wal<P: Into<Option<PathBuf>>>(wal_path: P) -> (Sender<EngineCommand>, Receiver<Trade>) {
     let (cmd_tx, cmd_rx) = channel();
     let (event_tx, event_rx) = channel();
-    thread::spawn(move || engine_loop(cmd_rx, event_tx));
+    let wal_path = wal_path.into();
+    thread::spawn(move || engine_loop(cmd_rx, event_tx, wal_path));
     (cmd_tx, event_rx)
 }
 
-fn engine_loop(rx: Receiver<EngineCommand>, event_tx: Sender<Trade>) {
+fn engine_loop(rx: Receiver<EngineCommand>, event_tx: Sender<Trade>, wal_path: Option<PathBuf>) {
     let mut book = OrderBook::new();
     let mut accounts = Accounts::new();
-    book.set_trade_sender(event_tx);
     // 주문 접수 순서가 곧 시간 우선순위이므로 단조 증가 카운터면 충분하다.
     let mut clock: u64 = 1;
+
+    // 1) 복구: WAL을 재생한다. 이 단계는 event_tx 연결 '전'이라 체결 이벤트가 서버로 새어나가지 않는다
+    //    (서버 DB엔 이미 그 체결들이 반영돼 있으므로 재발행하면 안 된다).
+    let mut wal = None;
+    if let Some(path) = wal_path {
+        let recovered = replay_wal(&path, &mut book, &mut clock);
+        if recovered > 0 {
+            println!("WAL 복구: {} 레코드 재생, 오더북 복원 완료", recovered);
+        }
+        wal = Some(Wal::open(&path));
+    }
+
+    // 2) 이제부터의 체결만 서버로 발행한다.
+    book.set_trade_sender(event_tx);
 
     for cmd in rx {
         match cmd {
             EngineCommand::Order { order_id, user_id, side, order_type, price, qty, reply } => {
-                let order = match order_type {
-                    OrderType::Limit => Order::limit(order_id, user_id, side, price, qty, clock),
-                    OrderType::Market => Order::market(order_id, user_id, side, qty, clock),
-                };
+                if let Some(w) = wal.as_mut() {
+                    w.append(&order_record(order_id, user_id, side, order_type, price, qty));
+                }
+                let order = make_order(order_id, user_id, side, order_type, price, qty, clock);
                 clock += 1;
                 let trades = book.process_order(order);
                 for t in &trades {
@@ -289,6 +314,9 @@ fn engine_loop(rx: Receiver<EngineCommand>, event_tx: Sender<Trade>) {
                 let _ = reply.send(trades);
             }
             EngineCommand::Cancel { order_id, reply } => {
+                if let Some(w) = wal.as_mut() {
+                    w.append(&json!({ "t": "cancel", "order_id": order_id }).to_string());
+                }
                 let _ = reply.send(book.cancel_order(order_id).map(|o| o.id));
             }
             EngineCommand::Deposit { user_id, cash, asset } => accounts.deposit(user_id, cash, asset),
@@ -303,6 +331,85 @@ fn engine_loop(rx: Receiver<EngineCommand>, event_tx: Sender<Trade>) {
             }
         }
     }
+}
+
+fn make_order(order_id: OrderId, user_id: u64, side: Side, ot: OrderType, price: Price, qty: Qty, clock: u64) -> Order {
+    match ot {
+        OrderType::Limit => Order::limit(order_id, user_id, side, price, qty, clock),
+        OrderType::Market => Order::market(order_id, user_id, side, qty, clock),
+    }
+}
+
+/// WAL 한 줄(주문 접수). serde_json으로 side/order_type을 문자열화.
+fn order_record(order_id: OrderId, user_id: u64, side: Side, ot: OrderType, price: Price, qty: Qty) -> String {
+    json!({
+        "t": "order",
+        "order_id": order_id,
+        "user_id": user_id,
+        "side": if side == Side::Buy { "BUY" } else { "SELL" },
+        "order_type": if ot == OrderType::Limit { "LIMIT" } else { "MARKET" },
+        "price": price,
+        "qty": qty,
+    })
+    .to_string()
+}
+
+/// append-only WAL. 매 레코드마다 flush 한다.
+// ponytail: fsync 없이 flush만 — OS 캐시 유실엔 안전하지 않음. 절대 내구성 필요하면 sync_all 추가.
+// ponytail: 로그가 무한히 커진다 — 주기적 스냅샷+truncate는 로그가 문제될 만큼 커지면.
+struct Wal {
+    file: File,
+}
+
+impl Wal {
+    fn open(path: &Path) -> Self {
+        let file = OpenOptions::new().create(true).append(true).open(path).expect("WAL 파일 열기 실패");
+        Self { file }
+    }
+
+    fn append(&mut self, line: &str) {
+        writeln!(self.file, "{line}").expect("WAL 기록 실패");
+        self.file.flush().expect("WAL flush 실패");
+    }
+}
+
+/// WAL을 재생해 오더북을 복원한다. 반환: 재생한 레코드 수. 파일이 없으면 0.
+/// 재생 중 체결은 메모리에서만 일어난다(호출자가 event_tx 연결 전에 부른다).
+fn replay_wal(path: &Path, book: &mut OrderBook, clock: &mut u64) -> usize {
+    let Ok(file) = File::open(path) else { return 0 };
+    let mut count = 0;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        match v["t"].as_str() {
+            Some("order") => {
+                let side = if v["side"] == "BUY" { Side::Buy } else { Side::Sell };
+                let ot = if v["order_type"] == "MARKET" { OrderType::Market } else { OrderType::Limit };
+                let order = make_order(
+                    v["order_id"].as_u64().unwrap_or(0),
+                    v["user_id"].as_u64().unwrap_or(0),
+                    side,
+                    ot,
+                    v["price"].as_u64().unwrap_or(0),
+                    v["qty"].as_u64().unwrap_or(0),
+                    *clock,
+                );
+                *clock += 1;
+                book.process_order(order);
+                count += 1;
+            }
+            Some("cancel") => {
+                if let Some(id) = v["order_id"].as_u64() {
+                    book.cancel_order(id);
+                    count += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    count
 }
 
 /// taker가 이 가격의 maker와 거래할 수 있는가?
@@ -474,6 +581,69 @@ mod tests {
         let (bal_tx, bal_rx) = channel();
         engine.send(EngineCommand::Balance { user_id: 2, reply: bal_tx }).unwrap();
         assert_eq!(bal_rx.recv().unwrap(), (-2_000, 2));
+    }
+
+    #[test]
+    fn wal_recovers_orderbook_after_restart() {
+        // 임시 WAL 경로 (겹치지 않게 nanos)
+        let path = std::env::temp_dir().join(format!(
+            "lucent_wal_test_{}.log",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // --- 엔진 1: 주문 3건 넣고 한 건은 취소 ---
+        let (engine, _events) = start_engine_wal(path.clone());
+        let (reply_tx, reply_rx) = channel();
+        let mut order = |id: u64, side: Side, price: u64, qty: u64| {
+            engine
+                .send(EngineCommand::Order {
+                    order_id: id,
+                    user_id: 1,
+                    side,
+                    order_type: OrderType::Limit,
+                    price,
+                    qty,
+                    reply: reply_tx.clone(),
+                })
+                .unwrap();
+            reply_rx.recv().unwrap();
+        };
+        order(1, Side::Buy, 1_000, 5);
+        order(2, Side::Buy, 900, 3);
+        order(3, Side::Sell, 1_100, 2);
+        let (cx, cr) = channel();
+        engine.send(EngineCommand::Cancel { order_id: 2, reply: cx }).unwrap();
+        cr.recv().unwrap();
+        drop(engine); // 엔진 1 정지
+
+        // --- 엔진 2: 같은 WAL로 재시작 → 오더북이 복원돼야 한다 ---
+        let (engine2, _e2) = start_engine_wal(path.clone());
+        let (bx, br) = channel();
+        engine2.send(EngineCommand::Book { reply: bx }).unwrap();
+        let (bids, asks) = br.recv().unwrap();
+        assert_eq!(bids, vec![(1_000, 5)]); // 주문 1만 남음 (2는 취소됨)
+        assert_eq!(asks, vec![(1_100, 2)]); // 주문 3
+
+        // 복원된 주문과 실제로 체결도 된다: 매도 1100은 이미 있으니 매수 1100이 체결.
+        let (rx2, rr2) = channel();
+        engine2
+            .send(EngineCommand::Order {
+                order_id: 4,
+                user_id: 2,
+                side: Side::Buy,
+                order_type: OrderType::Limit,
+                price: 1_100,
+                qty: 2,
+                reply: rx2,
+            })
+            .unwrap();
+        let trades = rr2.recv().unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].maker_order_id, 3);
+
+        drop(engine2);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
